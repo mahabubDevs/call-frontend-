@@ -1,13 +1,10 @@
 import React, { useRef, useState, useEffect } from "react";
 import { io } from "socket.io-client";
 
-const socket = io("https://callbackend.thepigeonhub.com", { secure: true });
+const socket = io("http://localhost:5004");
 
 function App() {
   const [roomId, setRoomId] = useState("");
-  const [callActive, setCallActive] = useState(false);
-  const [secondsElapsed, setSecondsElapsed] = useState(0);
-
   const localVideoRef = useRef();
   const remoteVideoRef = useRef();
   const remoteAudioRef = useRef();
@@ -18,9 +15,8 @@ function App() {
   );
 
   let otherUserId = useRef(null);
-  let timerInterval = useRef(null);
-  const MAX_CALL_DURATION = 300; // 5 minutes
 
+  // 🔹 Dummy video (যদি camera না থাকে)
   function getDummyVideoTrack() {
     const canvas = document.createElement("canvas");
     canvas.width = 640;
@@ -32,8 +28,7 @@ function App() {
   }
 
   useEffect(() => {
-    if (!callActive) return;
-
+    // 🔹 Camera আছে কিনা check
     navigator.mediaDevices
       .enumerateDevices()
       .then(async (devices) => {
@@ -44,12 +39,18 @@ function App() {
 
         const stream = await navigator.mediaDevices.getUserMedia(constraints);
 
+        // যদি video না থাকে, dummy video add করো
         if (!hasCamera) {
           const dummyTrack = getDummyVideoTrack();
           stream.addTrack(dummyTrack);
         }
 
-        if (localVideoRef.current) localVideoRef.current.srcObject = stream;
+        // local preview
+        if (localVideoRef.current) {
+          localVideoRef.current.srcObject = stream;
+        }
+
+        // add tracks to connection
         stream.getTracks().forEach((track) => pc.current.addTrack(track, stream));
       })
       .catch((err) => {
@@ -57,12 +58,21 @@ function App() {
         alert("Camera/microphone not found: " + err.message);
       });
 
+    // 🔹 যখন অন্য ইউজারের ভিডিও/অডিও আসে
     pc.current.ontrack = (event) => {
       const [stream] = event.streams;
       if (remoteVideoRef.current) remoteVideoRef.current.srcObject = stream;
-      if (remoteAudioRef.current) remoteAudioRef.current.srcObject = stream;
+      if (remoteAudioRef.current) {
+        remoteAudioRef.current.srcObject = stream;
+        remoteAudioRef.current
+          .play()
+          .catch(() =>
+            console.warn("Autoplay blocked — user interaction required.")
+          );
+      }
     };
 
+    // 🔹 ICE candidate পাঠানো
     pc.current.onicecandidate = (event) => {
       if (event.candidate && otherUserId.current) {
         socket.emit("ice-candidate", {
@@ -72,6 +82,7 @@ function App() {
       }
     };
 
+    // 🔹 অন্য ইউজার রুমে থাকলে
     socket.on("other-user", (userId) => {
       otherUserId.current = userId;
       pc.current
@@ -86,10 +97,12 @@ function App() {
         });
     });
 
+    // 🔹 নতুন ইউজার join করলে
     socket.on("user-joined", (userId) => {
       otherUserId.current = userId;
     });
 
+    // 🔹 Offer handle
     socket.on("offer", async (payload) => {
       await pc.current.setRemoteDescription(payload.sdp);
       const answer = await pc.current.createAnswer();
@@ -97,10 +110,12 @@ function App() {
       socket.emit("answer", { target: payload.caller, sdp: answer });
     });
 
+    // 🔹 Answer handle
     socket.on("answer", async (payload) => {
       await pc.current.setRemoteDescription(payload.sdp);
     });
 
+    // 🔹 ICE candidate handle
     socket.on("ice-candidate", async (payload) => {
       try {
         await pc.current.addIceCandidate(payload.candidate);
@@ -108,57 +123,11 @@ function App() {
         console.error(e);
       }
     });
+  }, []);
 
-    // 🔹 Timer setup
-    timerInterval.current = setInterval(() => {
-      setSecondsElapsed((prev) => {
-        if (prev >= MAX_CALL_DURATION) {
-          endCall();
-          return prev;
-        }
-        return prev + 1;
-      });
-    }, 1000);
-
-    return () => clearInterval(timerInterval.current);
-  }, [callActive]);
-
+  // 🔹 Room join button
   const joinRoom = () => {
-    if (!roomId) return;
-    socket.emit("join-room", roomId);
-    setCallActive(true);
-    setSecondsElapsed(0);
-  };
-
-  const endCall = () => {
-    setCallActive(false);
-    setSecondsElapsed(0);
-
-    // tracks বন্ধ করা
-    const localStream = localVideoRef.current?.srcObject;
-    if (localStream) {
-      localStream.getTracks().forEach((track) => track.stop());
-    }
-
-    const remoteStream = remoteVideoRef.current?.srcObject;
-    if (remoteStream) {
-      remoteStream.getTracks().forEach((track) => track.stop());
-    }
-
-    pc.current.close();
-    pc.current = new RTCPeerConnection({
-      iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
-    });
-    otherUserId.current = null;
-    clearInterval(timerInterval.current);
-  };
-
-  const formatTime = (sec) => {
-    const m = Math.floor(sec / 60)
-      .toString()
-      .padStart(2, "0");
-    const s = (sec % 60).toString().padStart(2, "0");
-    return `${m}:${s}`;
+    if (roomId !== "") socket.emit("join-room", roomId);
   };
 
   return (
@@ -169,21 +138,10 @@ function App() {
         placeholder="Enter Room Code"
         value={roomId}
         onChange={(e) => setRoomId(e.target.value)}
-        disabled={callActive}
       />
-      {!callActive ? (
-        <button onClick={joinRoom} style={{ marginLeft: "10px" }}>
-          Join Room
-        </button>
-      ) : (
-        <button onClick={endCall} style={{ marginLeft: "10px", background: "red", color: "#fff" }}>
-          Cancel Call
-        </button>
-      )}
-
-      {callActive && (
-        <p>Call Duration: {formatTime(secondsElapsed)}</p>
-      )}
+      <button onClick={joinRoom} style={{ marginLeft: "10px" }}>
+        Join Room
+      </button>
 
       <div style={{ display: "flex", marginTop: "20px" }}>
         <div style={{ textAlign: "center" }}>
