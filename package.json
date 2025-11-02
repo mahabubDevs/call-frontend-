@@ -9,9 +9,10 @@
     "socket.io-client": "^4.9.1"
   },
   "scripts": {
-    "start": " react-scripts start",
-    "build": "react-scripts build"
-  },
+  "start": "PORT=3009 react-scripts start",
+  "build": "react-scripts build"
+}
+,
   "eslintConfig": {
     "extends": [
       "react-app"
