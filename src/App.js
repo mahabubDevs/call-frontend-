@@ -1,7 +1,7 @@
 import React, { useRef, useState, useEffect } from "react";
 import { io } from "socket.io-client";
 
-const socket = io("http://localhost:5004");
+const socket = io("https://callbackend.thepigeonhub.com", { secure: true });
 
 function App() {
   const [roomId, setRoomId] = useState("");
