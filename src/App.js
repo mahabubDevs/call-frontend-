@@ -7,7 +7,6 @@ function App() {
   const [roomId, setRoomId] = useState("");
   const [callActive, setCallActive] = useState(false);
   const [secondsElapsed, setSecondsElapsed] = useState(0);
-  const [bothConnected, setBothConnected] = useState(false);
 
   const localVideoRef = useRef();
   const remoteVideoRef = useRef();
@@ -33,9 +32,8 @@ function App() {
   }
 
   useEffect(() => {
-    if (!bothConnected) return;
+    if (!callActive) return;
 
-    // Start media stream only after both connected
     navigator.mediaDevices
       .enumerateDevices()
       .then(async (devices) => {
@@ -74,26 +72,8 @@ function App() {
       }
     };
 
-    // 🔹 Start timer
-    setCallActive(true);
-    timerInterval.current = setInterval(() => {
-      setSecondsElapsed((prev) => {
-        if (prev >= MAX_CALL_DURATION) {
-          endCall();
-          return prev;
-        }
-        return prev + 1;
-      });
-    }, 1000);
-
-    return () => clearInterval(timerInterval.current);
-  }, [bothConnected]);
-
-  // socket events
-  useEffect(() => {
     socket.on("other-user", (userId) => {
       otherUserId.current = userId;
-      setBothConnected(true); // both connected -> start call
       pc.current
         .createOffer()
         .then((offer) => pc.current.setLocalDescription(offer))
@@ -115,12 +95,10 @@ function App() {
       const answer = await pc.current.createAnswer();
       await pc.current.setLocalDescription(answer);
       socket.emit("answer", { target: payload.caller, sdp: answer });
-      setBothConnected(true);
     });
 
     socket.on("answer", async (payload) => {
       await pc.current.setRemoteDescription(payload.sdp);
-      setBothConnected(true);
     });
 
     socket.on("ice-candidate", async (payload) => {
@@ -131,32 +109,32 @@ function App() {
       }
     });
 
-    socket.on("call-ended", () => {
-      alert("The other user ended the call.");
-      endCall();
-    });
+    // 🔹 Timer setup
+    timerInterval.current = setInterval(() => {
+      setSecondsElapsed((prev) => {
+        if (prev >= MAX_CALL_DURATION) {
+          endCall();
+          return prev;
+        }
+        return prev + 1;
+      });
+    }, 1000);
 
-    return () => {
-      socket.off("other-user");
-      socket.off("user-joined");
-      socket.off("offer");
-      socket.off("answer");
-      socket.off("ice-candidate");
-      socket.off("call-ended");
-    };
-  }, []);
+    return () => clearInterval(timerInterval.current);
+  }, [callActive]);
 
   const joinRoom = () => {
     if (!roomId) return;
     socket.emit("join-room", roomId);
+    setCallActive(true);
+    setSecondsElapsed(0);
   };
 
   const endCall = () => {
     setCallActive(false);
-    setBothConnected(false);
     setSecondsElapsed(0);
 
-    // stop local stream
+    // tracks বন্ধ করা
     const localStream = localVideoRef.current?.srcObject;
     if (localStream) {
       localStream.getTracks().forEach((track) => track.stop());
@@ -173,12 +151,12 @@ function App() {
     });
     otherUserId.current = null;
     clearInterval(timerInterval.current);
-
-    socket.emit("call-ended"); // inform other user
   };
 
   const formatTime = (sec) => {
-    const m = Math.floor(sec / 60).toString().padStart(2, "0");
+    const m = Math.floor(sec / 60)
+      .toString()
+      .padStart(2, "0");
     const s = (sec % 60).toString().padStart(2, "0");
     return `${m}:${s}`;
   };
@@ -198,15 +176,12 @@ function App() {
           Join Room
         </button>
       ) : (
-        <button
-          onClick={endCall}
-          style={{ marginLeft: "10px", background: "red", color: "#fff" }}
-        >
+        <button onClick={endCall} style={{ marginLeft: "10px", background: "red", color: "#fff" }}>
           Cancel Call
         </button>
       )}
 
-      {callActive && bothConnected && (
+      {callActive && (
         <p>Call Duration: {formatTime(secondsElapsed)}</p>
       )}
 
