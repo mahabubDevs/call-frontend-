@@ -1,6 +1,7 @@
 import React, { useRef, useState, useEffect } from "react";
 import { io } from "socket.io-client";
 
+// 🔹 Socket.io signaling server
 const socket = io("https://callbackend.thepigeonhub.com", { secure: true });
 
 function App() {
@@ -8,9 +9,18 @@ function App() {
   const localVideoRef = useRef();
   const remoteVideoRef = useRef();
   const remoteAudioRef = useRef();
+
+  // 🔹 Peer connection with STUN + TURN
   const pc = useRef(
     new RTCPeerConnection({
-      iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
+      iceServers: [
+        { urls: "stun:stun.l.google.com:19302" }, // STUN
+        {
+          urls: "turn:openrelay.metered.ca:443?transport=tcp", // TURN server
+          username: "openrelayproject",
+          credential: "openrelayproject",
+        },
+      ],
     })
   );
 
@@ -28,7 +38,7 @@ function App() {
   }
 
   useEffect(() => {
-    // 🔹 Camera আছে কিনা check
+    // 🔹 Camera check + local stream
     navigator.mediaDevices
       .enumerateDevices()
       .then(async (devices) => {
@@ -39,18 +49,15 @@ function App() {
 
         const stream = await navigator.mediaDevices.getUserMedia(constraints);
 
-        // যদি video না থাকে, dummy video add করো
         if (!hasCamera) {
           const dummyTrack = getDummyVideoTrack();
           stream.addTrack(dummyTrack);
         }
 
-        // local preview
         if (localVideoRef.current) {
           localVideoRef.current.srcObject = stream;
         }
 
-        // add tracks to connection
         stream.getTracks().forEach((track) => pc.current.addTrack(track, stream));
       })
       .catch((err) => {
@@ -58,7 +65,7 @@ function App() {
         alert("Camera/microphone not found: " + err.message);
       });
 
-    // 🔹 যখন অন্য ইউজারের ভিডিও/অডিও আসে
+    // 🔹 Remote stream handle
     pc.current.ontrack = (event) => {
       const [stream] = event.streams;
       if (remoteVideoRef.current) remoteVideoRef.current.srcObject = stream;
@@ -72,7 +79,7 @@ function App() {
       }
     };
 
-    // 🔹 ICE candidate পাঠানো
+    // 🔹 ICE candidates send
     pc.current.onicecandidate = (event) => {
       if (event.candidate && otherUserId.current) {
         socket.emit("ice-candidate", {
@@ -82,7 +89,7 @@ function App() {
       }
     };
 
-    // 🔹 অন্য ইউজার রুমে থাকলে
+    // 🔹 Signaling events
     socket.on("other-user", (userId) => {
       otherUserId.current = userId;
       pc.current
@@ -97,12 +104,10 @@ function App() {
         });
     });
 
-    // 🔹 নতুন ইউজার join করলে
     socket.on("user-joined", (userId) => {
       otherUserId.current = userId;
     });
 
-    // 🔹 Offer handle
     socket.on("offer", async (payload) => {
       await pc.current.setRemoteDescription(payload.sdp);
       const answer = await pc.current.createAnswer();
@@ -110,12 +115,10 @@ function App() {
       socket.emit("answer", { target: payload.caller, sdp: answer });
     });
 
-    // 🔹 Answer handle
     socket.on("answer", async (payload) => {
       await pc.current.setRemoteDescription(payload.sdp);
     });
 
-    // 🔹 ICE candidate handle
     socket.on("ice-candidate", async (payload) => {
       try {
         await pc.current.addIceCandidate(payload.candidate);
@@ -125,14 +128,13 @@ function App() {
     });
   }, []);
 
-  // 🔹 Room join button
   const joinRoom = () => {
     if (roomId !== "") socket.emit("join-room", roomId);
   };
 
   return (
     <div style={{ padding: "20px" }}>
-      <h2>🎥 2-User Video Call with Audio</h2>
+      <h2>🎥 2-User Video Call with Audio (STUN + TURN)</h2>
       <input
         type="text"
         placeholder="Enter Room Code"
